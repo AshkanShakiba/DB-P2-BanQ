@@ -13,6 +13,7 @@ def main():
         cursor = connection.cursor()
 
         create_tables(cursor)
+        create_procedures(cursor)
 
         cursor.close()
         connection.close()
@@ -79,6 +80,320 @@ def create_tables(cursor):
                     primary key,
             time timestamp not null
         );   
+    ''')
+
+
+def create_procedures(cursor):
+    create_register_procedure(cursor)
+    create_login_procedure(cursor)
+
+    create_deposit_procedure(cursor)
+    create_withdraw_procedure(cursor)
+    create_transfer_procedure(cursor)
+    create_interest_payment_procedure(cursor)
+
+    create_update_balances_procedure(cursor)
+    create_check_balance_function(cursor)
+
+
+def create_register_procedure(cursor):
+    cursor.execute('''
+        create or replace procedure register(
+            username_p varchar,
+            password_p varchar,
+            first_name_p varchar,
+            last_name_p varchar,
+            national_id_p int8,
+            date_of_birth_p date,
+            interest_rate_p float4,
+            type_p varchar
+        )
+        language plpgsql
+        as $$
+        declare
+            interest_rate_v float4;
+            years_of_age integer;
+        begin
+            interest_rate_v := interest_rate_p;
+            if type_p = 'employee' then
+                interest_rate_v := 0;
+            end if;
+
+            select extract(year from age(current_date, date_of_birth_p)) into years_of_age;
+
+            if years_of_age < 13 then
+                raise exception 'age is less than 13';
+            end if;
+
+            insert into account(number, username, password, first_name, last_name,
+                                national_id, date_of_birth,interest_rate, type)
+                values (1, username_p, hashtext(password_p), first_name_p, last_name_p,
+                        national_id_p, date_of_birth_p, interest_rate_v, type_p);
+        end $$;
+
+        create or replace function update_user_number()
+            returns trigger as $$
+        declare
+            user_number integer;
+            unique_username varchar(100);
+        begin
+            unique_username := '';
+            while unique_username = ''
+                loop
+                    unique_username := to_char(floor(random() * 10000000000000000), 'fm0000000000000000');
+                    select into unique_username case
+                        when exists(select 1 from account where username = unique_username) then ''
+                        else unique_username end;
+                end loop;
+            user_number := (abs(hashtext(new.first_name || new.last_name || unique_username))) % 10000000000000000;
+            update account set number = user_number where account.username = new.username;
+            insert into latest_balance (number, amount) values (user_number, 0);
+            return new;
+        end;
+        $$ language plpgsql;
+
+        create trigger calculate_account_number
+            after insert on account for each row
+        execute function update_user_number();
+    ''')
+
+
+def create_login_procedure(cursor):
+    cursor.execute('''
+        create or replace procedure login(
+            username_p varchar,
+            password_p varchar
+        )
+        language plpgsql
+        as $$
+        declare
+            hash_of_password varchar;
+            select_username varchar;
+        begin
+            hash_of_password := hashtext(password_p);
+            select username
+                from account
+                where account.username = username_p and account.password = hash_of_password
+                into select_username;
+            
+            if select_username is null then
+                raise exception 'invalid input';
+            end if;
+            
+            insert into login_log (username, time) values (username_p, clock_timestamp());
+        end
+        $$;
+    ''')
+
+
+def create_deposit_procedure(cursor):
+    cursor.execute('''
+        create or replace procedure deposit(
+            amount_p float4
+        )
+        language plpgsql
+        as $$
+        declare
+            source_number int8;
+        begin
+            select number
+            from account
+            where account.username = (
+                select username
+                from login_log login_log1
+                where login_log1.time = (
+                    select max(login_log2.time)
+                    from login_log login_log2
+                )
+            )
+            into source_number;
+        
+            insert into transaction (type, time, source, destination, amount)
+                values ('deposit', clock_timestamp(), source_number, null, amount_p);
+        end
+        $$; 
+    ''')
+
+
+def create_withdraw_procedure(cursor):
+    cursor.execute('''
+        create or replace procedure withdraw(
+            amount_p float4
+        )
+        language plpgsql
+        as $$
+        declare
+            destination_number int8;
+        begin
+            select number
+            from account
+            where account.username = (
+                select username
+                from login_log login_log1
+                where login_log1.time = (
+                    select max(login_log2.time)
+                    from login_log login_log2
+                )
+            )
+            into destination_number;
+        
+            insert into transaction (type, time, source, destination, amount)
+                values ('withdraw', clock_timestamp(), null, destination_number, amount_p);
+        end
+        $$;
+    ''')
+
+
+def create_transfer_procedure(cursor):
+    cursor.execute('''
+        create or replace procedure transfer(
+            amount_p float4,
+            destination_p int8
+        )
+        language plpgsql
+        as $$
+        declare
+            source_number int8;
+        begin
+            select number
+            from account
+            where account.username = (
+                select username
+                from login_log login_log1
+                where login_log1.time = (
+                    select max(login_log2.time)
+                    from login_log login_log2
+                )
+            )
+            into source_number;
+        
+            insert into transaction (type, time, source, destination, amount)
+                values ('transfer', clock_timestamp(), source_number, destination_p, amount_p);
+        end
+        $$;
+    ''')
+
+
+def create_interest_payment_procedure(cursor):
+    cursor.execute('''
+        create or replace procedure interest_payment()
+        language plpgsql
+        as $$
+        declare
+            balance float4;
+            updated_balance float4;
+            interest float4;
+            source_number int8;
+        begin
+            for source_number in
+                select number from account
+                where account.interest_rate is not null and account.interest_rate <> 0
+                loop
+                    select amount from latest_balance where number = source_number into balance;
+                    select interest_rate from account where number = source_number into interest;
+                    updated_balance = (balance * interest) / 100;
+                    insert into transaction(type, time, source, destination, amount)
+                    values ('interest', clock_timestamp(), source_number, null, updated_balance);
+                end loop;
+        end
+        $$;
+    ''')
+
+
+def create_update_balances_procedure(cursor):
+    cursor.execute('''
+        create or replace procedure update_balances()
+        language plpgsql
+        as $$
+        declare
+            last_snapshot_time timestamp;
+            transaction_id int4;
+            transaction_type varchar;
+            source_number int4;
+            destination_number int4;
+            amount_v float4;
+            source_last_amount float4;
+            destination_last_amount float4;
+            destination_type varchar;
+        begin
+            select max(time) from snapshot_log into last_snapshot_time;
+        
+            for transaction_id in select id from transaction
+                                    where transaction.time >= last_snapshot_time or last_snapshot_time is null
+                loop
+                    select type into transaction_type from transaction where id = transaction_id;
+                    select source into source_number from transaction where id = transaction_id;
+                    select destination into destination_number from transaction where id = transaction_id;
+                    select amount into amount_v from transaction where id = transaction_id;
+                    select type into destination_type from account where number = transaction_id;
+        
+                    if transaction_type = 'deposit' then
+                        select amount into source_last_amount from latest_balance where number = source_number;
+                        update latest_balance set amount = source_last_amount + amount_v where number = source_number;
+                    end if;
+        
+                    if transaction_type = 'withdraw' then
+                        select amount into destination_last_amount from latest_balance where number = destination_number;
+                        if destination_last_amount - amount_v < 0 and destination_type = 'employee' then
+                            update latest_balance set amount = destination_last_amount - amount_v where number = destination_number;
+                        end if;
+                        if destination_last_amount - amount_v >= 0 then
+                            update latest_balance set amount = destination_last_amount - amount_v where number = destination_number;
+                        end if;
+                    end if;
+        
+                    if transaction_type = 'transfer' then
+                        select amount into source_last_amount from latest_balance where number = source_number;
+                        select amount into destination_last_amount from latest_balance where number = destination_number;
+        
+                        select amount into destination_last_amount from latest_balance where number = destination_number;
+                        if source_last_amount - amount_v < 0 and destination_type = 'employee' then
+                            update latest_balance set amount = source_last_amount - amount_v where number = source_number;
+                            update latest_balance set amount = destination_last_amount + amount_v where number = destination_number;
+                        end if;
+                        if source_last_amount - amount_v >= 0 then
+                            update latest_balance set amount = source_last_amount - amount_v where number = source_number;
+                            update latest_balance set amount = destination_last_amount + amount_v where number = destination_number;
+                        end if;
+                    end if;
+        
+                    if transaction_type = 'interest' then
+                        select amount into source_last_amount from latest_balance where number = source_number;
+                        update latest_balance set amount = source_last_amount + amount_v where number = source_number;
+                    end if;
+                end loop;
+                
+            insert into snapshot_log (time) values (clock_timestamp());
+        end
+        $$;
+    ''')
+
+
+def create_check_balance_function(cursor):
+    cursor.execute('''
+        create or replace function check_balance()
+            returns decimal(10, 2)
+        language plpgsql
+        as $$
+        declare
+            account_number int8;
+            balance float4;
+        begin
+            select number
+            from account
+            where account.username = (
+                select username
+                from login_log login_log1
+                where login_log1.time = (
+                    select max(login_log2.time)
+                    from login_log login_log2
+                )
+            )
+            into account_number;
+            select amount into balance from latest_balance where number = account_number;
+            return balance;
+        end
+        $$;
     ''')
 
 
