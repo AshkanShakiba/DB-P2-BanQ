@@ -15,11 +15,181 @@ def main():
         create_tables(cursor)
         create_procedures(cursor)
 
+        menu(cursor)
+
         cursor.close()
         connection.close()
 
-    except (Exception, psycopg2.Error) as error:
-        print("Error: ", error)
+    except (Exception, psycopg2.Error) as exception:
+        print("Error:", exception)
+
+
+def menu(cursor):
+    print("* BanQ - version 1.0 *")
+
+    while True:
+        print("[1] Register")
+        print("[2] Login")
+        print("[3] Deposit")
+        print("[4] Withdraw")
+        print("[5] Transfer")
+        print("[6] Interest Payment")
+        print("[7] Update Balances")
+        print("[8] Check Balance")
+        print("[9] Exit")
+
+        choice = int(input())
+
+        if choice == 1:
+            register(cursor)
+
+        elif choice == 2:
+            login(cursor)
+
+        elif choice == 3:
+            deposit(cursor)
+
+        elif choice == 4:
+            withdraw(cursor)
+
+        elif choice == 5:
+            transfer(cursor)
+
+        elif choice == 6:
+            interest_payment(cursor)
+
+        elif choice == 7:
+            update_balances(cursor)
+
+        elif choice == 8:
+            check_balance(cursor)
+
+        elif choice == 9:
+            exit(0)
+
+        else:
+            print("Error: invalid input")
+
+
+def register(cursor):
+    try:
+        username = input("Username: ")
+        password = input("Password: ")
+        first_name = input("First Name: ")
+        last_name = input("Last Name: ")
+        national_id = input("National Id: ")
+        date_of_birth = input("Date of birth (YYYY-MM-DD):")
+        interest_rate = input("Interest Rate: ")
+        type_of_account = input("Client or Employee?")
+        cursor.execute(f'''
+            call register(
+                '{username}'::varchar,
+                '{password}'::varchar,
+                '{first_name}'::varchar,
+                '{last_name}'::varchar,
+                {int(national_id)}::int8,
+                to_date('{date_of_birth}', 'YYYY-MM-DD'),
+                {float(interest_rate)}::float4,
+                '{type_of_account.lower()}'::varchar
+            )
+        ''')
+        print("Registered successfully")
+
+    except Exception as exception:
+        print("Error while registration:", exception)
+
+
+def login(cursor):
+    try:
+        username = input("Username: ")
+        password = input("Password: ")
+        cursor.execute(f'''
+            call login(
+                '{username}'::varchar,
+                '{password}'::varchar
+            )
+        ''')
+        print("Logged in successfully")
+
+    except Exception as exception:
+        print("Error while logging in:", exception)
+
+
+def deposit(cursor):
+    try:
+        amount = input("Amount: ")
+        cursor.execute(f'''
+            call deposit(
+                {float(amount)}::float4
+            )
+        ''')
+        print("The deposit has been successfully made")
+
+    except Exception as exception:
+        print("Error while making the deposit:", exception)
+
+
+def withdraw(cursor):
+    try:
+        amount = input("Amount: ")
+        cursor.execute(f'''
+            call withdraw(
+                {float(amount)}::float4
+            )
+        ''')
+        print("The withdrawal has been successfully made")
+
+    except Exception as exception:
+        print("Error while making the withdrawal:", exception)
+
+
+def transfer(cursor):
+    try:
+        amount = input("Amount: ")
+        destination = input("Destination: ")
+        cursor.execute(f'''
+            call transfer(
+                {float(amount)}::float4,
+                {int(destination)}::int8
+            )
+        ''')
+        print("The transfer has been successfully done")
+
+    except Exception as exception:
+        print("Error while doing the transfer:", exception)
+
+
+def interest_payment(cursor):
+    try:
+        cursor.execute(f'''
+            call interest_payment()
+        ''')
+        print("The interest has been successfully paid")
+
+    except Exception as exception:
+        print("Error while paying interest:", exception)
+
+
+def update_balances(cursor):
+    try:
+        cursor.execute(f'''
+            call update_balances()
+        ''')
+        print("The update has been successfully done")
+
+    except Exception as exception:
+        print("Error while updating balances:", exception)
+
+
+def check_balance(cursor):
+    try:
+        cursor.execute(f'''
+            select * from check_balance()
+        ''')
+        print("Balance:", int(cursor.fetchall()[0][0]))
+
+    except Exception as exception:
+        print("Error while checking balances:", exception)
 
 
 def create_tables(cursor):
